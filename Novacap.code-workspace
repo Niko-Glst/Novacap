@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "SSH FS - novacapital",
+			"uri": "ssh://novacapital/"
+		}
+	],
+	"settings": {}
+}
