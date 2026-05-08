@@ -3,6 +3,7 @@ import time
 import requests
 import pandas as pd
 import yfinance as yf
+import numpy as np
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -41,18 +42,15 @@ def get_liquidity_data():
 def get_snp500_data():
     """Haalt S&P 500 data op met lokale caching."""
     ticker = "^GSPC"  # S&P 500 Index
-    file_name = "snp500_price_data.csv"
+    file_name = "data/snp500_price_data.csv"
     
-    if os.path.exists(file_name):
-        print(f"Laden van lokale S&P 500 data...")
-        price_data = pd.read_csv(file_name, index_col='Date', parse_dates=True)
-    else:
-        print(f"Ophalen S&P 500 via Yahoo Finance...")
-        asset = yf.Ticker(ticker)
-        price_data = asset.history(period="max", interval="1d")
-        price_data.index = price_data.index.tz_localize(None)
-        price_data.to_csv(file_name)
-        time.sleep(1) # Rate limit protection
+    # Altijd verse data ophalen voor testen
+    print(f"Ophalen verse S&P 500 via Yahoo Finance...")
+    asset = yf.Ticker(ticker)
+    price_data = asset.history(period="max", interval="1d")
+    price_data.index = price_data.index.tz_localize(None)
+    price_data.to_csv(file_name)
+    time.sleep(1) # Rate limit protection
         
     return price_data[['Close']].rename(columns={'Close': 'SP500_Close'})
 
@@ -61,25 +59,38 @@ def build_macro_pipeline():
     snp500 = get_snp500_data()
     liquidity = get_liquidity_data()
     
+    # Als liquidity niet beschikbaar, ga door met NaN
     if liquidity is None:
-        return
+        liquidity = pd.DataFrame(index=snp500.index)
+        liquidity['Total_Liquidity'] = np.nan
+        liquidity['Liquidity_30d_RoC'] = np.nan
 
-    # 2. Samenvoegen op datum (Inner join zorgt dat we alleen dagen hebben met beide datapunten)
-    merged_df = pd.merge(snp500, liquidity, left_index=True, right_index=True, how='inner')
+    # 2. Samenvoegen op datum (Left join zodat alle S&P data behouden blijft)
+    merged_df = pd.merge(snp500, liquidity, left_index=True, right_index=True, how='left')
+    
+    # Vul ontbrekende liquiditeit met NaN
+    if 'Total_Liquidity' not in merged_df.columns:
+        merged_df['Total_Liquidity'] = np.nan
+        merged_df['Liquidity_30d_RoC'] = np.nan
+    
+    # Vul ontbrekende liquiditeit met NaN
+    if 'Total_Liquidity' not in merged_df.columns:
+        merged_df['Total_Liquidity'] = np.nan
+        merged_df['Liquidity_30d_RoC'] = np.nan
     
     # 3. Voeg de "Forward Return" toe (Wat doet de S&P 500 over 30 dagen?)
     # Dit is wat je uiteindelijk wilt voorspellen.
     merged_df['SP500_Future_30d_Return'] = merged_df['SP500_Close'].shift(-30) / merged_df['SP500_Close'] - 1
     
-    # 4. Schoonmaken
-    merged_df.dropna(inplace=True)
+    # 4. Schoonmaken - alleen NaN in SP500_Close verwijderen
+    merged_df.dropna(subset=['SP500_Close'], inplace=True)
     
     # Opslaan voor analyse
-    merged_df.to_csv("snp500_macro_dataset.csv")
+    merged_df.to_csv("data/snp500_macro_dataset.csv")
     
     print("\n--- S&P 500 Macro Pijplijn Resultaat ---")
     print(merged_df.tail())
-    print("\nDataset opgeslagen als 'snp500_macro_dataset.csv'")
+    print("\nDataset opgeslagen als 'data/snp500_macro_dataset.csv'")
 
 if __name__ == "__main__":
     build_macro_pipeline()
