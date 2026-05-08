@@ -2,9 +2,14 @@ import requests
 import pandas as pd
 from pathlib import Path
 from datetime import date
+from dotenv import load_dotenv
+import os
+
+# Laad environment variables
+load_dotenv()
 
 # ── Configuratie ─────────────────────────────────────────────
-API_KEY    = "9be0914852d41ae1559bb74f2d4251b4"
+API_KEY    = os.getenv("FRED_API_KEY")
 DATA_DIR   = Path("data")
 CACHE_FILE = DATA_DIR / "vix_historical.csv"
 

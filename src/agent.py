@@ -1,6 +1,10 @@
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+from dotenv import load_dotenv
+
+# Laad environment variables uit .env bestand
+load_dotenv()
 
 # Geen LLM nodig, we gebruiken regel-gebaseerd advies
 
