@@ -44,6 +44,8 @@ def perform_vix_analysis():
     plt.savefig("data/vix_zscore_analysis.png")
     print("Analyse voltooid! Grafiek opgeslagen als 'data/vix_zscore_analysis.png'")
     plt.show()
+    
+    return True
 
     # 5. Correlatie check
     correlation = df['VIX_ZScore'].corr(df['SP500_Future_30d_Return'])

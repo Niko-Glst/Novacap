@@ -1,64 +1,70 @@
+import json
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Laad environment variables uit .env bestand
 load_dotenv()
 
+STATUS_FILE = Path("data/status.json")
+
 # Geen LLM nodig, we gebruiken regel-gebaseerd advies
 
-def load_data():
-    """Laad de opgeslagen CSV data."""
+
+def load_status():
+    if not STATUS_FILE.exists():
+        print("Fout: data/status.json niet gevonden. Run eerst de scrapers om status bij te werken.")
+        return None
     try:
-        # Laad S&P 500 data
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Fout bij laden van status.json: {e}")
+        return None
+
+
+def load_plot_data():
+    try:
         snp_df = pd.read_csv("data/snp500_price_data.csv", index_col='Date', parse_dates=True)
         snp_df = snp_df[['Close']].rename(columns={'Close': 'SP500_Close'})
-        
-        # Laad VIX data
         vix_df = pd.read_csv("data/vix_historical.csv", index_col='date', parse_dates=True)
         vix_df.rename(columns={'value': 'VIX'}, inplace=True)
         vix_df['VIX'] = pd.to_numeric(vix_df['VIX'], errors='coerce')
-        
-        # Merge op datum (inner join voor gemeenschappelijke datums)
-        df = pd.merge(snp_df, vix_df, left_index=True, right_index=True, how='inner')
-        
-        return df
+        return pd.merge(snp_df, vix_df, left_index=True, right_index=True, how='inner')
     except FileNotFoundError as e:
-        print(f"Fout bij laden data: {e}")
+        print(f"Fout bij laden plotdata: {e}")
+        return None
+    except Exception as e:
+        print(f"Onverwachte fout bij laden plotdata: {e}")
         return None
 
-def compute_metrics(df):
-    """Bereken relevante metrics voor advies."""
-    if df.empty:
+def load_data():
+    """Laad de samenvattende status JSON data."""
+    return load_status()
+
+def compute_metrics(status):
+    """Bereken relevante metrics op basis van status.json."""
+    if not status:
         return None
-    
-    # Neem de laatste beschikbare data
-    latest = df.iloc[-1]
-    
-    # Bereken VIX Z-score (rolling 252 dagen)
-    window = 252
-    df['VIX_Mean'] = df['VIX'].rolling(window=window).mean()
-    df['VIX_Std'] = df['VIX'].rolling(window=window).std()
-    df['VIX_ZScore'] = (df['VIX'] - df['VIX_Mean']) / df['VIX_Std']
-    
-    latest_zscore = df['VIX_ZScore'].iloc[-1]
-    
-    # Recente verandering S&P 500 (laatste 30 dagen)
-    sp_change_30d = (latest['SP500_Close'] / df['SP500_Close'].iloc[-30] - 1) * 100 if len(df) > 30 else 0
-    
-    # VIX verandering
-    vix_change_30d = (latest['VIX'] / df['VIX'].iloc[-30] - 1) * 100 if len(df) > 30 else 0
-    
+
+    sp = status.get("sp500", {})
+    vix = status.get("vix", {})
+    liquidity = status.get("liquidity", {})
+
     metrics = {
-        "current_sp500": latest['SP500_Close'],
-        "current_vix": latest['VIX'],
-        "vix_zscore": latest_zscore,
-        "sp500_change_30d": sp_change_30d,
-        "vix_change_30d": vix_change_30d,
-        "liquidity_roc": latest.get('Liquidity_30d_RoC', 0) * 100
+        "current_sp500": sp.get("close"),
+        "current_vix": vix.get("value"),
+        "vix_zscore": vix.get("zscore", 0),
+        "sp500_change_30d": sp.get("change_30d_pct", 0) or 0,
+        "vix_change_30d": vix.get("change_30d_pct", 0) or 0,
+        "liquidity_roc": liquidity.get("roc_30d_pct", 0) or 0,
+        "vix_trend": vix.get("trend"),
+        "sp500_trend": sp.get("trend"),
+        "liquidity_status": liquidity.get("status")
     }
-    
+
     return metrics
 
 def get_llm_advice(metrics):
@@ -100,28 +106,28 @@ def get_llm_advice(metrics):
     
     return advice
 
-def plot_data(df, days):
+def plot_data(days):
     """Plot VIX en S&P 500 voor de laatste 'days' dagen."""
-    if df.empty:
+    df = load_plot_data()
+    if df is None or df.empty:
         print("Geen data om te plotten.")
         return
-    
-    # Neem laatste 'days' dagen
+
     recent_df = df.tail(days)
-    
+
     fig, ax1 = plt.subplots(figsize=(12, 6))
-    
+
     # S&P 500
     ax1.plot(recent_df.index, recent_df['SP500_Close'], color='blue', label='S&P 500')
     ax1.set_ylabel('S&P 500 Prijs', color='blue')
     ax1.tick_params(axis='y', labelcolor='blue')
-    
+
     # VIX op tweede as
     ax2 = ax1.twinx()
     ax2.plot(recent_df.index, recent_df['VIX'], color='red', label='VIX')
     ax2.set_ylabel('VIX Niveau', color='red')
     ax2.tick_params(axis='y', labelcolor='red')
-    
+
     # Titel en legenda
     ax1.set_title(f'VIX vs S&P 500 - Laatste {days} dagen')
     fig.tight_layout()
@@ -130,18 +136,18 @@ def plot_data(df, days):
 def main():
     print("=== Markt Advies Agent ===")
     
-    # Laad data
-    df = load_data()
-    if df is None:
+    # Laad summary status
+    status = load_data()
+    if status is None:
         return
     
     # Bereken metrics
-    metrics = compute_metrics(df)
+    metrics = compute_metrics(status)
     if metrics is None:
         print("Geen data beschikbaar voor analyse.")
         return
     
-    print("Data geladen en metrics berekend.")
+    print("Data geladen uit status.json en metrics berekend.")
     
     # Hele analyse
     print("\n--- Volledige Markt Analyse ---")
@@ -193,7 +199,7 @@ def main():
         else:
             print("Ongeldige keuze, standaard 30 dagen.")
             days = 30
-        plot_data(df, days)
+        plot_data(days)
 
 if __name__ == "__main__":
     main()
