@@ -49,7 +49,7 @@ def get_snp500_data():
     else:
         print(f"Ophalen S&P 500 via Yahoo Finance...")
         asset = yf.Ticker(ticker)
-        price_data = asset.history(period="5y", interval="1d")
+        price_data = asset.history(period="max", interval="1d")
         price_data.index = price_data.index.tz_localize(None)
         price_data.to_csv(file_name)
         time.sleep(1) # Rate limit protection

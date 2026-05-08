@@ -1,70 +1,106 @@
-import asyncio
-import re
+import requests
 import pandas as pd
 from pathlib import Path
-from crawl4ai import AsyncWebCrawler
+from datetime import date
 
+# ── Configuratie ─────────────────────────────────────────────
+API_KEY    = "9be0914852d41ae1559bb74f2d4251b4"
 DATA_DIR   = Path("data")
 CACHE_FILE = DATA_DIR / "vix_historical.csv"
-URL        = "https://fred.stlouisfed.org/data/VIXCLS.txt"
 
-def load_local() -> pd.DataFrame | None:
-    if CACHE_FILE.exists():
-        df = pd.read_csv(CACHE_FILE, parse_dates=["date"])
-        print(f"Lokale data gevonden: {len(df)} rijen ({df['date'].min().date()} - {df['date'].max().date()})")
-        return df
-    print("Geen lokale data gevonden, wordt opgehaald...")
-    return None
-
-async def scrape_vix() -> pd.DataFrame | None:
-    async with AsyncWebCrawler(verbose=False) as crawler:
-        result = await crawler.arun(url=URL, bypass_cache=True)
-
-        if not result.success:
-            print(f"Ophalen mislukt: {result.error_message}")
-            return None
-
-        # Probeer html attribuut ipv markdown — bevat ruwe tekstdata
-        raw = result.html
-
-        print("--- RAW OUTPUT (eerste 300 tekens) ---")
-        print(repr(raw[:300]))
-        print("--- EINDE DEBUG ---")
-
-        # FRED .txt formaat: "1990-01-02  23.34"
-        pattern = r"(\d{4}-\d{2}-\d{2})\s+([\d.]+)"
-        matches = re.findall(pattern, raw)
-        print(f"Matches gevonden: {len(matches)}")
-
-        if not matches:
-            print("Geen data gevonden")
-            return None
-
-        df = pd.DataFrame(matches, columns=["date", "VIX"])
-        df["date"] = pd.to_datetime(df["date"])
-        df["VIX"]  = df["VIX"].astype(float)
-        df = df.sort_values("date", ascending=False).reset_index(drop=True)
-        return df
-
-async def get_vix(force_refresh: bool = False) -> pd.DataFrame | None:
+def setup():
+    """Maakt data map aan als die nog niet bestaat."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not force_refresh:
-        df = load_local()
-        if df is not None:
-            return df
+def load_local() -> pd.DataFrame | None:
+    """
+    Kijkt of lokale cache bestaat EN van vandaag is.
+    - Bestaat niet         → None (ga fetchen)
+    - Bestaat maar oud     → None (ga fetchen)
+    - Bestaat en up-to-date → geef data terug
+    """
+    if not CACHE_FILE.exists():
+        print("Geen lokaal bestand gevonden, wordt aangemaakt...")
+        return None
 
-    df = await scrape_vix()
+    df = pd.read_csv(CACHE_FILE, parse_dates=["date"])
 
+    if df.empty:
+        print("Lokaal bestand is leeg, wordt opnieuw opgehaald...")
+        return None
+
+    laatste_datum = df["date"].max().date()
+    vandaag       = date.today()
+
+    if laatste_datum < vandaag:
+        print(f"Data verouderd (laatste: {laatste_datum}), wordt bijgewerkt...")
+        return None
+
+    print(f"Lokale data is up-to-date: {len(df)} rijen ({df['date'].min().date()} - {laatste_datum})")
+    return df
+
+def fetch_fred(series_id: str, start: str = "1990-01-01") -> pd.DataFrame | None:
+    """Haalt data op via FRED API. Herbruikbaar voor elke serie."""
+    print(f"Ophalen van FRED: {series_id}...")
+
+    response = requests.get(
+        "https://api.stlouisfed.org/fred/series/observations",
+        params={
+            "series_id":         series_id,
+            "api_key":           API_KEY,
+            "file_type":         "json",
+            "observation_start": start,
+            "sort_order":        "desc"
+        }
+    )
+
+    if response.status_code != 200:
+        print(f"API fout: {response.status_code} - {response.text}")
+        return None
+
+    df = pd.DataFrame(response.json()["observations"])[["date", "value"]]
+    df = df[df["value"] != "."].copy()
+    df["date"]  = pd.to_datetime(df["date"])
+    df["value"] = df["value"].astype(float)
+    df.rename(columns={"value": series_id}, inplace=True)
+    df = df.sort_values("date", ascending=False).reset_index(drop=True)
+
+    print(f"Opgehaald: {len(df)} datapunten")
+    return df
+
+def save_local(df: pd.DataFrame):
+    """Slaat data op als CSV, overschrijft oude versie."""
+    df.to_csv(CACHE_FILE, index=False)
+    print(f"Opgeslagen: {CACHE_FILE}")
+
+def get_vix() -> pd.DataFrame | None:
+    """
+    Hoofdfunctie:
+    1. Kijk lokaal
+    2. Fetch alleen als nodig
+    3. Sla automatisch op
+    """
+    setup()
+
+    # Stap 1: lokale check
+    df = load_local()
     if df is not None:
-        df.to_csv(CACHE_FILE, index=False)
-        print(f"Opgeslagen: {CACHE_FILE}")
+        return df
+
+    # Stap 2: ophalen via API
+    df = fetch_fred("VIXCLS")
+    if df is None:
+        return None
+
+    df.rename(columns={"VIXCLS": "VIX"}, inplace=True)
+
+    # Stap 3: automatisch opslaan
+    save_local(df)
 
     return df
 
-async def main():
-    # Verwijder oude cache eerst: del data\vix_historical.csv
-    df = await get_vix(force_refresh=True)
+def main():
+    df = get_vix()
 
     if df is None or len(df) < 2:
         print("Onvoldoende data beschikbaar")
@@ -86,4 +122,4 @@ async def main():
     print(df.head(5).to_string(index=False))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
